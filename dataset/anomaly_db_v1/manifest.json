@@ -1,0 +1,76 @@
+{
+  "name": "anomaly_db_v1",
+  "setting": {
+    "anomaly_types": [
+      "point",
+      "freq",
+      "trend",
+      "range"
+    ],
+    "balanced_classes": true,
+    "series_length": 256,
+    "background_noise": "random_from_none_light_moderate",
+    "split_seeds": {
+      "train": 101,
+      "val": 202,
+      "test": 303
+    },
+    "trend_variant": "default",
+    "max_number_of_intervals": 1,
+    "labels": [
+      "point_labels",
+      "events",
+      "description"
+    ],
+    "image_render": {
+      "style": "plain",
+      "width": 768,
+      "height": 384,
+      "image_dir": "images_plain_768x384"
+    }
+  },
+  "splits": {
+    "train": {
+      "num_samples": 8000,
+      "anomaly_type_counts": {
+        "freq": 2000,
+        "point": 2000,
+        "range": 2000,
+        "trend": 2000
+      },
+      "background_noise_counts": {
+        "light": 2660,
+        "moderate": 2674,
+        "none": 2666
+      }
+    },
+    "val": {
+      "num_samples": 1000,
+      "anomaly_type_counts": {
+        "freq": 250,
+        "point": 250,
+        "range": 250,
+        "trend": 250
+      },
+      "background_noise_counts": {
+        "light": 323,
+        "moderate": 328,
+        "none": 349
+      }
+    },
+    "test": {
+      "num_samples": 1000,
+      "anomaly_type_counts": {
+        "freq": 250,
+        "point": 250,
+        "range": 250,
+        "trend": 250
+      },
+      "background_noise_counts": {
+        "light": 324,
+        "moderate": 329,
+        "none": 347
+      }
+    }
+  }
+}
