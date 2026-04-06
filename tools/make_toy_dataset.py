@@ -1,14 +1,48 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from ts_grounder.taxonomy import TYPE_NAMES, TYPE_TO_ID
+
+
+def render_series_image(
+    series: np.ndarray,
+    size: tuple[int, int] = (768, 384),
+    line_width: float = 1.4,
+    add_grid: bool = True,
+) -> np.ndarray:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure(figsize=(8, 4), dpi=96)
+    ax = fig.add_subplot(111)
+    ax.plot(series, linewidth=line_width)
+    if add_grid:
+        ax.grid(True, alpha=0.25)
+    ax.set_xlim(0, len(series) - 1)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.tight_layout(pad=0.2)
+
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", bbox_inches="tight", pad_inches=0.02)
+    plt.close(fig)
+    buffer.seek(0)
+    image = Image.open(buffer).convert("L").resize(size)
+    image_np = np.asarray(image, dtype=np.float32) / 255.0
+    return image_np[None, ...]
 
 
 # 生成一个基础周期序列，后面往里面注入不同类型的异常。
@@ -77,18 +111,28 @@ def main() -> None:
     output_root = Path(args.output)
     train_dir = output_root / "train"
     val_dir = output_root / "val"
+    image_root = output_root / "images_plain_768x384"
     train_dir.mkdir(parents=True, exist_ok=True)
     val_dir.mkdir(parents=True, exist_ok=True)
+    (image_root / "train").mkdir(parents=True, exist_ok=True)
+    (image_root / "val").mkdir(parents=True, exist_ok=True)
 
-    for split_dir, count in [(train_dir, args.train_size), (val_dir, args.val_size)]:
+    for split_name, split_dir, count in [("train", train_dir, args.train_size), ("val", val_dir, args.val_size)]:
         for idx in range(count):
             series, mask, segments, types = make_sample(args.length, rng)
+            sample_id = f"sample_{idx:04d}"
+            image_rel_path = Path("images_plain_768x384") / split_name / f"{sample_id}.png"
+            image_abs_path = output_root / image_rel_path
+            image_np = render_series_image(series, size=(768, 384))
+            image_uint8 = np.clip(image_np[0] * 255.0, 0.0, 255.0).astype(np.uint8)
+            Image.fromarray(image_uint8, mode="L").save(image_abs_path)
             np.savez_compressed(
-                split_dir / f"sample_{idx:04d}.npz",
+                split_dir / f"{sample_id}.npz",
                 series=series,
                 mask=mask,
                 segments=segments,
                 types=types,
+                image_path=image_rel_path.as_posix(),
             )
 
 

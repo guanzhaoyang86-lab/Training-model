@@ -4,6 +4,7 @@ output_dir: outputs/default_run
 data:
   train_dir: data/train
   val_dir: data/val
+  raw_dataset_root: dataset/anomaly_db_v1
   image_size: [224, 224]
   local_window: 25
 
@@ -15,7 +16,7 @@ model:
   dropout: 0.1
 
 train:
-  epochs: 30
+  epochs: 200
   batch_size: 8
   num_workers: 0
   lr: 0.0003

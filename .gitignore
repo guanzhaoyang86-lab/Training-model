@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
 _toy_run/
+_smoke_run/
 outputs/
 data/
+data_full/
+logs/
+.mplconfig/

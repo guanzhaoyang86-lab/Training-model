@@ -57,6 +57,7 @@ def main() -> None:
         local_window=cfg["data"]["local_window"],
         enable_aug=False,
         seed=cfg["seed"],
+        raw_dataset_root=cfg["data"].get("raw_dataset_root"),
     )
 
     items = []

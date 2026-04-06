@@ -38,6 +38,7 @@ output_dir: _toy_run/outputs
 data:
   train_dir: _toy_run/data/train
   val_dir: _toy_run/data/val
+  raw_dataset_root: _toy_run/data
   image_size: [224, 224]
   local_window: 25
 

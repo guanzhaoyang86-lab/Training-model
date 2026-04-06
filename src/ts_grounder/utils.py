@@ -35,3 +35,9 @@ def ensure_dir(path: str | Path) -> Path:
 def dump_json(obj: Dict[str, Any], path: str | Path) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
+# 以 YAML 格式保存对象，便于保留实际生效的训练配置快照。
+def dump_yaml(obj: Dict[str, Any], path: str | Path) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(obj, f, allow_unicode=True, sort_keys=False)
