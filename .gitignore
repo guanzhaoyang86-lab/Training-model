@@ -3,7 +3,15 @@ __pycache__/
 /_toy_run/
 /_smoke_run/
 /outputs/
+/dataset/
 /data/
+/data_vlm/
 /data_full/
 /logs/
 /.mplconfig/
+/.cache/
+/.tmp/
+/_tsb_adu_windowed_prepare_check/
+/_tsb_adu_windowed_prepare_full_check/
+slurm-*.out
+slurm-*.err
