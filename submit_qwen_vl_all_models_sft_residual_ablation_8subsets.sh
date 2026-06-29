@@ -35,6 +35,9 @@ STAGE1_MEMORY="${STAGE1_MEMORY:-140G}"
 SUBSET_MEMORY="${SUBSET_MEMORY:-140G}"
 STAGE1_TIME_LIMIT="${STAGE1_TIME_LIMIT:-10:00:00}"
 CLEANUP_TIME_LIMIT="${CLEANUP_TIME_LIMIT:-00:30:00}"
+CLEANUP_PARTITION="${CLEANUP_PARTITION:-$PARTITION}"
+CLEANUP_GRES="${CLEANUP_GRES:-$GRES}"
+CLEANUP_CONSTRAINT="${CLEANUP_CONSTRAINT:-$CONSTRAINT}"
 
 TINY_TRAIN_LIMIT="${TINY_TRAIN_LIMIT:-30}"
 SMALL_TRAIN_LIMIT="${SMALL_TRAIN_LIMIT:-80}"
@@ -614,22 +617,32 @@ JSON
     dependency="afterany:$(IFS=:; echo "${model_subset_job_ids[*]}")"
     cleanup_output_dir="$model_run_root/cleanup"
     mkdir -p "$cleanup_output_dir"
-    cleanup_job_id="$(
-      env \
-        "MODEL_RUN_ROOT=$model_run_root" \
-        "STAGE1_OUTPUT_DIR=$stage1_output_dir" \
-        sbatch --parsable \
-          "--account=$ACCOUNT" \
-          "--partition=$PARTITION" \
-          "--job-name=tsg-${label//_/-}-cleanup" \
-          "--mem=8G" \
-          "--cpus-per-task=1" \
-          "--time=$CLEANUP_TIME_LIMIT" \
-          "--dependency=$dependency" \
-          "--output=$cleanup_output_dir/slurm-%x-%j.out" \
-          "--error=$cleanup_output_dir/slurm-%x-%j.err" \
-          "$cleanup_job_script"
-    )"
+    cleanup_env_cmd=(
+      env
+      "MODEL_RUN_ROOT=$model_run_root"
+      "STAGE1_OUTPUT_DIR=$stage1_output_dir"
+    )
+    cleanup_sbatch_cmd=(
+      sbatch
+      --parsable
+      "--account=$ACCOUNT"
+      "--partition=$CLEANUP_PARTITION"
+      "--job-name=tsg-${label//_/-}-cleanup"
+      "--mem=8G"
+      "--cpus-per-task=1"
+      "--time=$CLEANUP_TIME_LIMIT"
+      "--dependency=$dependency"
+      "--output=$cleanup_output_dir/slurm-%x-%j.out"
+      "--error=$cleanup_output_dir/slurm-%x-%j.err"
+    )
+    if [[ -n "$CLEANUP_GRES" ]]; then
+      cleanup_sbatch_cmd+=("--gres=$CLEANUP_GRES")
+    fi
+    if [[ -n "$CLEANUP_CONSTRAINT" ]]; then
+      cleanup_sbatch_cmd+=("--constraint=$CLEANUP_CONSTRAINT")
+    fi
+    cleanup_sbatch_cmd+=("$cleanup_job_script")
+    cleanup_job_id="$("${cleanup_env_cmd[@]}" "${cleanup_sbatch_cmd[@]}")"
     echo "cleanup model=$label job_id=$cleanup_job_id dependency=$dependency"
   fi
 
