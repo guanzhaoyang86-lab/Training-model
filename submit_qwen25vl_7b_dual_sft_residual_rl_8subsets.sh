@@ -185,7 +185,7 @@ cat > "$config_path" <<JSON
     "balanced_by_type": true
   },
   "prompt": {
-    "system_prompt": "You are a vision-language anomaly grounding model for time-series plots. Read the plain PNG plot and the indexed time-series values, then return exactly one JSON object. The JSON object must contain two keys: evidence and summary. evidence must be a list. Each item in evidence must contain start, end, type, strength, and direction. type must be one of point, freq, trend, range. If no anomaly is detected, return {\"evidence\": [], \"summary\": \"No anomaly is detected.\"}. Do not output markdown, explanations, or extra text.",
+    "system_prompt": "You are a vision-language anomaly grounding model for time-series plots. Read the plain PNG plot and the indexed time-series values, then return exactly one JSON object. The JSON object must contain two keys: evidence and summary. evidence must be a list. Each item in evidence must contain start, end, type, strength, and direction. type must be one of point, freq, trend, range. Return at most 5 evidence items. Merge adjacent or nearby anomalous indices into continuous intervals before output. Do not list many isolated single-point fluctuations; if many anomalous points appear, summarize them using the smallest covering intervals. Keep the summary to one short sentence. If no anomaly is detected, return {\"evidence\": [], \"summary\": \"No anomaly is detected.\"}. Do not output markdown, explanations, or extra text.",
     "user_prompt": "Inspect this plain time-series window plot and the accompanying indexed values. Ground the anomaly in the current window and return one JSON object with structured evidence and one English summary sentence."
   },
   "model": {
