@@ -23,6 +23,7 @@ BATCH_TAG="${BATCH_TAG:-$(date +%Y%m%d_%H%M%S)}"
 MODELS="${MODELS:-7b 2b 4b 8b}"
 SUBSETS="${SUBSETS:-Daphnet MSL NEK Power SED TAO TODS YAHOO}"
 VARIANTS="${VARIANTS:-full_residual no_residual}"
+EXPERIMENT_SEED="${EXPERIMENT_SEED:-2026}"
 
 ACCOUNT="${ACCOUNT:-p33222}"
 PARTITION="${PARTITION:-gengpu}"
@@ -38,6 +39,7 @@ CLEANUP_TIME_LIMIT="${CLEANUP_TIME_LIMIT:-00:10:00}"
 CLEANUP_PARTITION="${CLEANUP_PARTITION:-$PARTITION}"
 CLEANUP_GRES="${CLEANUP_GRES:-$GRES}"
 CLEANUP_CONSTRAINT="${CLEANUP_CONSTRAINT:-$CONSTRAINT}"
+CLEANUP_DEPENDENCY_MODE="${CLEANUP_DEPENDENCY_MODE:-afterany}"
 
 TINY_TRAIN_LIMIT="${TINY_TRAIN_LIMIT:-30}"
 SMALL_TRAIN_LIMIT="${SMALL_TRAIN_LIMIT:-80}"
@@ -270,54 +272,64 @@ case "$VARIANT" in
   no_residual)
     echo "=== Stage 3 skipped: no residual mining ablation ==="
     ;;
+  sft_only)
+    echo "=== Stage 3 skipped: SFT-only baseline ==="
+    ;;
   *)
-    echo "Unsupported VARIANT=$VARIANT. Expected full_residual or no_residual." >&2
+    echo "Unsupported VARIANT=$VARIANT. Expected full_residual, no_residual, or sft_only." >&2
     exit 1
     ;;
 esac
 
-echo "=== Stage 4: boundary-aware GRPO ==="
-grpo_cmd=(
-  "$PYTHON_BIN" -m ts_grounder.rl_train_grpo
-  --model_name_or_path "$OUTPUT_DIR/model"
-  --reference_model_path "$OUTPUT_DIR/model"
-  --train_file "$OUTPUT_DIR/dataset_cache/train.jsonl"
-  --use_boundary_aware_reward
-  --image_root "$SOURCE_ROOT"
-  --output_dir "$RL_OUTPUT_DIR"
-  --num_generations "${RL_NUM_GENERATIONS:-4}"
-  --max_new_tokens "${RL_MAX_NEW_TOKENS:-256}"
-  --temperature "${RL_TEMPERATURE:-0.7}"
-  --top_p "${RL_TOP_P:-0.9}"
-  --learning_rate "${RL_LEARNING_RATE:-1e-6}"
-  --num_train_epochs "${RL_NUM_TRAIN_EPOCHS:-1}"
-  --kl_coef "${RL_KL_COEF:-0.02}"
-  --tau_match "${TAU_MATCH:-0.1}"
-  --tau_good "${TAU_GOOD:-0.5}"
-  --series_length "${SERIES_LENGTH:-256}"
-  --max_index "${MAX_INDEX:-255}"
-  --prediction_schema evidence
-  --reward_event_weight "${REWARD_EVENT_WEIGHT:-0.45}"
-  --reward_iou_weight "${REWARD_IOU_WEIGHT:-0.35}"
-  --reward_boundary_weight "${REWARD_BOUNDARY_WEIGHT:-0.15}"
-  --reward_type_weight "${REWARD_TYPE_WEIGHT:-0.05}"
-  --save_steps "${RL_SAVE_STEPS:-0}"
-  --optimizer "${RL_OPTIMIZER:-adafactor}"
-)
-if [[ "$VARIANT" == "full_residual" ]]; then
-  grpo_cmd+=(
-    --residual_pool_file "$RESIDUAL_POOL_PATH"
-    --use_residual_pool
-    --residual_pool_sampling_ratios "${RESIDUAL_POOL_SAMPLING_RATIOS:-false_negative=0.3,boundary_error=0.3,false_positive=0.2,correct_abnormal=0.1,correct_normal=0.1}"
+eval_model_path="$OUTPUT_DIR/model"
+if [[ "$VARIANT" == "sft_only" ]]; then
+  echo "=== Stage 4 skipped: SFT-only baseline ==="
+else
+  echo "=== Stage 4: boundary-aware GRPO ==="
+  grpo_cmd=(
+    "$PYTHON_BIN" -m ts_grounder.rl_train_grpo
+    --model_name_or_path "$OUTPUT_DIR/model"
+    --reference_model_path "$OUTPUT_DIR/model"
+    --train_file "$OUTPUT_DIR/dataset_cache/train.jsonl"
+    --use_boundary_aware_reward
+    --image_root "$SOURCE_ROOT"
+    --output_dir "$RL_OUTPUT_DIR"
+    --num_generations "${RL_NUM_GENERATIONS:-4}"
+    --max_new_tokens "${RL_MAX_NEW_TOKENS:-256}"
+    --temperature "${RL_TEMPERATURE:-0.7}"
+    --top_p "${RL_TOP_P:-0.9}"
+    --learning_rate "${RL_LEARNING_RATE:-1e-6}"
+    --num_train_epochs "${RL_NUM_TRAIN_EPOCHS:-1}"
+    --kl_coef "${RL_KL_COEF:-0.02}"
+    --tau_match "${TAU_MATCH:-0.1}"
+    --tau_good "${TAU_GOOD:-0.5}"
+    --series_length "${SERIES_LENGTH:-256}"
+    --max_index "${MAX_INDEX:-255}"
+    --prediction_schema evidence
+    --reward_event_weight "${REWARD_EVENT_WEIGHT:-0.45}"
+    --reward_iou_weight "${REWARD_IOU_WEIGHT:-0.35}"
+    --reward_boundary_weight "${REWARD_BOUNDARY_WEIGHT:-0.15}"
+    --reward_type_weight "${REWARD_TYPE_WEIGHT:-0.05}"
+    --save_steps "${RL_SAVE_STEPS:-0}"
+    --optimizer "${RL_OPTIMIZER:-adafactor}"
+    --seed "${EXPERIMENT_SEED:-2026}"
   )
-  if [[ -n "${RL_RESIDUAL_POOL_EPOCH_SIZE:-}" ]]; then
-    grpo_cmd+=(--residual_pool_epoch_size "$RL_RESIDUAL_POOL_EPOCH_SIZE")
+  if [[ "$VARIANT" == "full_residual" ]]; then
+    grpo_cmd+=(
+      --residual_pool_file "$RESIDUAL_POOL_PATH"
+      --use_residual_pool
+      --residual_pool_sampling_ratios "${RESIDUAL_POOL_SAMPLING_RATIOS:-false_negative=0.3,boundary_error=0.3,false_positive=0.2,correct_abnormal=0.1,correct_normal=0.1}"
+    )
+    if [[ -n "${RL_RESIDUAL_POOL_EPOCH_SIZE:-}" ]]; then
+      grpo_cmd+=(--residual_pool_epoch_size "$RL_RESIDUAL_POOL_EPOCH_SIZE")
+    fi
   fi
+  if [[ -n "${RL_MAX_SAMPLES:-}" ]]; then
+    grpo_cmd+=(--max_samples "$RL_MAX_SAMPLES")
+  fi
+  PYTHONPATH="$ROOT_DIR/src:${PYTHONPATH:-}" "${grpo_cmd[@]}"
+  eval_model_path="$RL_OUTPUT_DIR/model"
 fi
-if [[ -n "${RL_MAX_SAMPLES:-}" ]]; then
-  grpo_cmd+=(--max_samples "$RL_MAX_SAMPLES")
-fi
-PYTHONPATH="$ROOT_DIR/src:${PYTHONPATH:-}" "${grpo_cmd[@]}"
 
 echo "=== Stage 5: final test ==="
 PROJECT_ROOT="$ROOT_DIR" \
@@ -325,7 +337,7 @@ PYTHON_BIN="$PYTHON_BIN" \
 RUN_DIR="$RL_OUTPUT_DIR" \
 SPLIT=test \
 CONFIG_PATH="$OUTPUT_DIR/resolved_config.yaml" \
-MODEL_PATH="$RL_OUTPUT_DIR/model" \
+MODEL_PATH="$eval_model_path" \
 DATASET_JSONL="$OUTPUT_DIR/dataset_cache/test.jsonl" \
 EVAL_DIR="$RL_OUTPUT_DIR/eval" \
 PREDICTIONS_PATH="$RL_OUTPUT_DIR/eval/test_predictions.jsonl" \
@@ -375,10 +387,12 @@ echo "SOURCE_ROOT_BASE=$SOURCE_ROOT_BASE"
 echo "MODELS=${SELECTED_MODELS[*]}"
 echo "SUBSETS=${SELECTED_SUBSETS[*]}"
 echo "VARIANTS=${SELECTED_VARIANTS[*]}"
+echo "EXPERIMENT_SEED=$EXPERIMENT_SEED"
 echo "STAGE1_SFT_NUM_TRAIN_EPOCHS=$STAGE1_SFT_NUM_TRAIN_EPOCHS"
 echo "STAGE2_SFT_NUM_TRAIN_EPOCHS=$STAGE2_SFT_NUM_TRAIN_EPOCHS"
 echo "RL_NUM_TRAIN_EPOCHS=$RL_NUM_TRAIN_EPOCHS"
 echo "EXCLUDE_NODES=${EXCLUDE_NODES:-none}"
+echo "CLEANUP_DEPENDENCY_MODE=$CLEANUP_DEPENDENCY_MODE"
 echo "BATCH_ROOT=$batch_root"
 
 for model_key in "${SELECTED_MODELS[@]}"; do
@@ -391,7 +405,7 @@ for model_key in "${SELECTED_MODELS[@]}"; do
 
   cat > "$config_path" <<JSON
 {
-  "seed": 2026,
+  "seed": $EXPERIMENT_SEED,
   "output_dir": "$stage1_output_dir",
   "data": {
     "source_root": "$SYNTHETIC_SOURCE_ROOT",
@@ -559,6 +573,7 @@ JSON
         "BASE_MODEL_PATH=$stage1_output_dir/model"
         "OUTPUT_DIR=$output_dir"
         "PYTHON_BIN=$PYTHON_BIN"
+        "EXPERIMENT_SEED=$EXPERIMENT_SEED"
         "STAGE2_SFT_NUM_TRAIN_EPOCHS=$STAGE2_SFT_NUM_TRAIN_EPOCHS"
         "MAX_NEW_TOKENS=$MAX_NEW_TOKENS"
         "RESIDUAL_BATCH_SIZE=$RESIDUAL_BATCH_SIZE"
@@ -614,7 +629,7 @@ JSON
     echo "[DRY_RUN] cleanup model=$label after all subset variant jobs"
     cleanup_job_id="DRY_RUN_${label}_CLEANUP"
   elif (( ${#model_subset_job_ids[@]} > 0 )); then
-    dependency="afterany:$(IFS=:; echo "${model_subset_job_ids[*]}")"
+    dependency="$CLEANUP_DEPENDENCY_MODE:$(IFS=:; echo "${model_subset_job_ids[*]}")"
     cleanup_output_dir="$model_run_root/cleanup"
     mkdir -p "$cleanup_output_dir"
     cleanup_env_cmd=(
