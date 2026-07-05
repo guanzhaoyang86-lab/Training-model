@@ -350,6 +350,7 @@ def _reward_weights_from_args(args) -> dict[str, float]:
 def _boundary_reward_weights_from_args(args) -> dict[str, float]:
     return resolve_boundary_aware_reward_weights(
         {
+            "point": float(args.reward_point_weight),
             "event": float(args.reward_event_weight),
             "iou": float(args.reward_iou_weight),
             "boundary": float(args.reward_boundary_weight),
@@ -401,6 +402,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=DEFAULT_PREDICTION_SCHEMA,
         choices=["events", "evidence", "auto"],
+    )
+    parser.add_argument(
+        "--reward_point_weight",
+        type=float,
+        default=DEFAULT_BOUNDARY_AWARE_REWARD_WEIGHTS["point"],
     )
     parser.add_argument(
         "--reward_event_weight",
@@ -469,6 +475,8 @@ def _config_defaults_from_file(config_path: str | Path, parser: argparse.Argumen
             weight_aliases = {
                 "event": "reward_event_weight",
                 "event_f1": "reward_event_weight",
+                "point": "reward_point_weight",
+                "point_f1": "reward_point_weight",
                 "iou": "reward_iou_weight",
                 "mean_iou": "reward_iou_weight",
                 "boundary": "reward_boundary_weight",

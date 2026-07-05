@@ -32,6 +32,7 @@ DEFAULT_RESIDUAL_SAMPLING_RATIOS = {
     "correct_normal": 0.10,
 }
 DEFAULT_BOUNDARY_AWARE_REWARD_WEIGHTS = {
+    "point": 0.0,
     "event": 0.45,
     "iou": 0.35,
     "boundary": 0.15,
@@ -521,6 +522,40 @@ def _union_coverage_length(events: list[dict[str, Any]], *, series_length: int) 
     return int(sum(end - start + 1 for start, end in merged))
 
 
+def _events_to_point_mask(events: list[dict[str, Any]], *, series_length: int) -> list[int]:
+    mask = [0] * int(series_length)
+    for event in events:
+        try:
+            start = max(0, min(int(series_length) - 1, int(event["start"])))
+            end = max(0, min(int(series_length) - 1, int(event["end"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start > end:
+            continue
+        for idx in range(start, end + 1):
+            mask[idx] = 1
+    return mask
+
+
+def point_prf_for_events(
+    pred_events: list[dict[str, Any]],
+    gt_events: list[dict[str, Any]],
+    *,
+    series_length: int,
+) -> dict[str, float]:
+    pred_mask = _events_to_point_mask(pred_events, series_length=series_length)
+    gt_mask = _events_to_point_mask(gt_events, series_length=series_length)
+    tp = sum(1 for pred, gt in zip(pred_mask, gt_mask) if pred and gt)
+    fp = sum(1 for pred, gt in zip(pred_mask, gt_mask) if pred and not gt)
+    fn = sum(1 for pred, gt in zip(pred_mask, gt_mask) if gt and not pred)
+    if tp == 0 and fp == 0 and fn == 0:
+        return {"precision": 1.0, "recall": 1.0, "f1": 1.0}
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = (2.0 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
+    return {"precision": float(precision), "recall": float(recall), "f1": float(f1)}
+
+
 def resolve_boundary_reward_weights(weights: dict[str, float] | None = None) -> dict[str, float]:
     resolved = dict(DEFAULT_BOUNDARY_AWARE_REWARD_WEIGHTS)
     if weights:
@@ -566,6 +601,9 @@ def compute_boundary_aware_reward_details(
             "mean_iou": 0.0,
             "boundary_iou": 0.0,
             "boundary_reward": 0.0,
+            "point_precision": 0.0,
+            "point_recall": 0.0,
+            "point_f1": 0.0,
             "type_score": 0.0,
             "normal_pred_coverage": 0.0,
             "normal_num_pred_events": 0,
@@ -578,7 +616,9 @@ def compute_boundary_aware_reward_details(
         series_length=series_length,
     )
     matches = event_scores["matches"]
+    point_scores = point_prf_for_events(parsed.events, gt_events, series_length=series_length)
     if gt_events:
+        point_f1 = float(point_scores["f1"])
         event_f1 = float(event_scores["event_f1"])
         mean_iou = float(sum(float(item["iou"]) for item in matches) / len(matches)) if matches else 0.0
         if matches:
@@ -598,6 +638,7 @@ def compute_boundary_aware_reward_details(
             boundary_reward = 0.0
             type_score = 0.0
         reward_terms = {
+            "point": point_f1,
             "event": event_f1,
             "iou": mean_iou,
             "boundary": boundary_reward,
@@ -606,6 +647,7 @@ def compute_boundary_aware_reward_details(
         r_task = sum(float(weights[key]) * float(reward_terms[key]) for key in weights)
     elif not parsed.events:
         reward_terms = {
+            "point": 1.0,
             "event": 1.0,
             "iou": 1.0,
             "boundary": 1.0,
@@ -620,6 +662,7 @@ def compute_boundary_aware_reward_details(
         coverage = _union_coverage_length(parsed.events, series_length=series_length) / float(series_length)
         r_task = max(0.0, 1.0 - coverage - (0.2 * len(parsed.events)))
         reward_terms = {
+            "point": 0.0,
             "normal_false_positive": float(r_task),
             "pred_coverage": float(coverage),
             "num_pred_events": float(len(parsed.events)),
@@ -646,6 +689,9 @@ def compute_boundary_aware_reward_details(
         "boundary_iou": float(mean_iou),
         "boundary_reward": float(boundary_reward),
         "boundary_mae": float(event_scores["boundary_mae"]),
+        "point_precision": float(point_scores["precision"]),
+        "point_recall": float(point_scores["recall"]),
+        "point_f1": float(point_scores["f1"]),
         "type_score": float(type_score),
         "normal_pred_coverage": (
             float(_union_coverage_length(parsed.events, series_length=series_length) / float(series_length))
