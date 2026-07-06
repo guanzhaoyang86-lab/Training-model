@@ -24,19 +24,33 @@ ERROR_TYPES = (
     "correct_abnormal",
     "correct_normal",
 )
-DEFAULT_RESIDUAL_SAMPLING_RATIOS = {
+LEGACY_RESIDUAL_SAMPLING_RATIOS = {
     "false_negative": 0.30,
     "boundary_error": 0.30,
     "false_positive": 0.20,
     "correct_abnormal": 0.10,
     "correct_normal": 0.10,
 }
-DEFAULT_BOUNDARY_AWARE_REWARD_WEIGHTS = {
+LEGACY_BOUNDARY_AWARE_REWARD_WEIGHTS = {
     "point": 0.0,
     "event": 0.45,
     "iou": 0.35,
     "boundary": 0.15,
     "type": 0.05,
+}
+DEFAULT_RESIDUAL_SAMPLING_RATIOS = {
+    "false_negative": 0.60,
+    "boundary_error": 0.20,
+    "false_positive": 0.10,
+    "correct_abnormal": 0.10,
+    "correct_normal": 0.00,
+}
+DEFAULT_BOUNDARY_AWARE_REWARD_WEIGHTS = {
+    "point": 0.60,
+    "event": 0.00,
+    "iou": 0.25,
+    "boundary": 0.15,
+    "type": 0.00,
 }
 ERROR_TYPE_FALLBACKS = {
     "false_negative": ("boundary_error", "correct_abnormal", "false_positive", "correct_normal"),
