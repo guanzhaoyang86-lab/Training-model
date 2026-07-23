@@ -1,76 +1,36 @@
 from __future__ import annotations
 
-import shutil
-import subprocess
+import argparse
 import sys
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-# 用 toy data 跑一个最小训练闭环，确保工程基本可运行。
+from ts_grounder.vlm_eval import load_jsonl, parse_generated_result
+
+
 def main() -> None:
-    root = Path("_toy_run")
-    if root.exists():
-        shutil.rmtree(root)
-    root.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Validate the prepared VLM smoke dataset.")
+    parser.add_argument("--dataset-jsonl", type=str, default="_vlm_smoke_run/dataset_cache/val.jsonl")
+    args = parser.parse_args()
 
-    subprocess.run(
-        [
-            sys.executable,
-            "tools/make_toy_dataset.py",
-            "--output",
-            str(root / "data"),
-            "--train_size",
-            "16",
-            "--val_size",
-            "4",
-            "--length",
-            "256",
-        ],
-        check=True,
-    )
+    repo_root = Path(__file__).resolve().parents[1]
+    dataset_jsonl = Path(args.dataset_jsonl)
+    if not dataset_jsonl.is_absolute():
+        dataset_jsonl = repo_root / dataset_jsonl
 
-    config_path = root / "smoke.yaml"
-    config_path.write_text(
-        """
-seed: 2026
-output_dir: _toy_run/outputs
-
-data:
-  train_dir: _toy_run/data/train
-  val_dir: _toy_run/data/val
-  raw_dataset_root: _toy_run/data
-  image_size: [224, 224]
-  local_window: 25
-
-model:
-  input_dim: 4
-  hidden_dim: 64
-  num_types: 4
-  text_layers: 2
-  dropout: 0.1
-
-train:
-  epochs: 1
-  batch_size: 4
-  num_workers: 0
-  lr: 0.0005
-  min_lr: 0.00001
-  weight_decay: 0.0001
-  grad_clip: 1.0
-
-loss_weights:
-  point: 1.0
-  seg: 1.0
-  type: 1.0
-  bc: 1.0
-  cons: 0.2
-  tv: 0.05
-""".strip(),
-        encoding="utf-8",
-    )
-
-    subprocess.run([sys.executable, "train.py", "--config", str(config_path)], check=True)
-    print("Smoke test finished.")
+    records = load_jsonl(dataset_jsonl)
+    if not records:
+        raise ValueError(f"空数据集：{dataset_jsonl}")
+    for record in records[: min(16, len(records))]:
+        if record.get("metadata", {}).get("task_type") == "qa":
+            if record["assistant_text"] != record.get("target", {}).get("answer"):
+                raise ValueError(f"QA target mismatch for {record['id']}")
+        else:
+            parsed = parse_generated_result(record["assistant_text"])
+            if parsed.to_dict() != record["target"]:
+                raise ValueError(f"schema round-trip failed for {record['id']}")
+    print(f"Smoke test passed for {len(records)} records: {dataset_jsonl}")
 
 
 if __name__ == "__main__":

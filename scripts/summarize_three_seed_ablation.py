@@ -12,7 +12,7 @@ from typing import Iterable
 
 
 DEFAULT_MODELS = ["qwen25vl_7b", "qwen3_vl_2b", "qwen3_vl_4b", "qwen3_vl_8b"]
-DEFAULT_SETTINGS = ["sft_only", "no_residual", "full_residual"]
+DEFAULT_SETTINGS = ["sft_only", "residual_v2"]
 DEFAULT_SUBSETS = ["Daphnet", "MSL", "NEK", "Power", "SED", "TAO", "TODS", "YAHOO"]
 
 
@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--root", default="outputs", help="Output root containing seed batch dirs.")
     parser.add_argument(
         "--prefix",
-        default="qwen_vl_all_models_sft_residual_ablation_8subsets_qwen_vl_three_setting_3seed",
+        default="qwen_vl_all_models_sft_residual_ablation_8subsets_sft_vs_residual_v2_8subsets_3seed",
         help="Batch directory prefix before _seed*. The script globs '<prefix>_seed*'.",
     )
     parser.add_argument("--models", nargs="*", default=DEFAULT_MODELS)

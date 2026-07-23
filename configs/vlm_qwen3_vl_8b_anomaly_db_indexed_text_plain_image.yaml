@@ -1,0 +1,59 @@
+{
+  "seed": 2026,
+  "output_dir": "outputs/qwen3_vl_8b_anomaly_db_indexed_text_plain_image",
+  "data": {
+    "source_root": "dataset/anomaly_db_v1",
+    "image_subdir": "images_plain_768x384",
+    "include_indexed_series_text": true,
+    "indexed_series_precision": 4,
+    "indexed_series_compact": false,
+    "series_normalization": {
+      "enabled": true,
+      "method": "robust_zscore",
+      "clip": 8.0,
+      "normalize_text": true,
+      "normalize_image": true,
+      "fit_on_original_window": true,
+      "image_subdir": "images_normalized_768x384"
+    },
+    "max_train_samples": null,
+    "max_val_samples": null,
+    "max_test_samples": null,
+    "balanced_by_type": true
+  },
+  "prompt": {
+    "system_prompt": "You are a vision-language anomaly grounding model for time-series plots. Read the plain PNG plot and the indexed time-series values, then return exactly one JSON object. The JSON object must contain two keys: evidence and summary. evidence must be a list. Each item in evidence must contain start, end, type, strength, and direction. type must be one of point, freq, trend, range. If no anomaly is detected, return {\"evidence\": [], \"summary\": \"No anomaly is detected.\"}. Do not output markdown, explanations, or extra text.",
+    "user_prompt": "Inspect this plain time-series window plot and the accompanying indexed values. Ground the anomaly in the current window and return one JSON object with structured evidence and one English summary sentence."
+  },
+  "model": {
+    "model_name_or_path": "/gpfs/projects/p33222/ybq9740/models/Qwen3-VL-8B-Instruct",
+    "trust_remote_code": true,
+    "processor_kwargs": {
+      "max_pixels": 131072
+    },
+    "from_pretrained_kwargs": {
+      "torch_dtype": "bfloat16",
+      "attn_implementation": "sdpa"
+    }
+  },
+  "training": {
+    "mode": "train",
+    "load_best_model_at_end": false,
+    "save_total_limit": 1,
+    "per_device_train_batch_size": 1,
+    "per_device_eval_batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 0.00001,
+    "num_train_epochs": 1,
+    "logging_steps": 10,
+    "save_steps": 1000,
+    "eval_steps": 1000,
+    "evaluation_strategy": "no",
+    "save_strategy": "no",
+    "gradient_checkpointing": true,
+    "bf16": true,
+    "fp16": false,
+    "optim": "adafactor",
+    "memory_optimized_loss": true
+  }
+}

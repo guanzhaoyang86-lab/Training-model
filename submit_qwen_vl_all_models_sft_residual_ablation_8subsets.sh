@@ -1,12 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-# Quest submitter for the full model matrix:
+# Quest submitter for the current full model matrix:
 #   Models: Qwen2.5-VL-7B, Qwen3-VL-2B, Qwen3-VL-4B, Qwen3-VL-8B
 #   Stage 1: synthetic SFT, 1 epoch
 #   Stage 2: real-subset SFT, 3 epochs on each of the 8 TSB-AD-U subsets
-#   Full branch: residual mining + boundary-aware GRPO, 1 epoch, then test
-#   Ablation branch: no residual mining, direct boundary-aware GRPO, 1 epoch, then test
+#   Branches:
+#     sft_only: Stage 2 SFT checkpoint directly evaluated on test
+#     residual_v2: residual mining + point-F1-aligned GRPO, then test
 #
 # The script removes model/checkpoint weights after evaluation and keeps metrics,
 # logs, manifests, and summaries.
@@ -22,7 +23,7 @@ BATCH_TAG="${BATCH_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 MODELS="${MODELS:-7b 2b 4b 8b}"
 SUBSETS="${SUBSETS:-Daphnet MSL NEK Power SED TAO TODS YAHOO}"
-VARIANTS="${VARIANTS:-full_residual no_residual}"
+VARIANTS="${VARIANTS:-sft_only residual_v2}"
 EXPERIMENT_SEED="${EXPERIMENT_SEED:-2026}"
 
 ACCOUNT="${ACCOUNT:-p33222}"
@@ -53,9 +54,9 @@ XL_TIME_LIMIT="${XL_TIME_LIMIT:-16:00:00}"
 
 STAGE1_SFT_NUM_TRAIN_EPOCHS="${STAGE1_SFT_NUM_TRAIN_EPOCHS:-1}"
 STAGE2_SFT_NUM_TRAIN_EPOCHS="${STAGE2_SFT_NUM_TRAIN_EPOCHS:-3}"
-RL_NUM_TRAIN_EPOCHS="${RL_NUM_TRAIN_EPOCHS:-1}"
+RL_NUM_TRAIN_EPOCHS="${RL_NUM_TRAIN_EPOCHS:-2}"
 
-MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-512}"
 RESIDUAL_BATCH_SIZE="${RESIDUAL_BATCH_SIZE:-1}"
 RESIDUAL_MAX_SAMPLES="${RESIDUAL_MAX_SAMPLES:-}"
 TAU_MATCH="${TAU_MATCH:-0.1}"
@@ -63,28 +64,22 @@ TAU_GOOD="${TAU_GOOD:-0.5}"
 SERIES_LENGTH="${SERIES_LENGTH:-256}"
 MAX_INDEX="${MAX_INDEX:-255}"
 
-RL_NUM_GENERATIONS="${RL_NUM_GENERATIONS:-4}"
-RL_MAX_NEW_TOKENS="${RL_MAX_NEW_TOKENS:-256}"
+RL_NUM_GENERATIONS="${RL_NUM_GENERATIONS:-6}"
+RL_MAX_NEW_TOKENS="${RL_MAX_NEW_TOKENS:-512}"
 RL_TEMPERATURE="${RL_TEMPERATURE:-0.7}"
 RL_TOP_P="${RL_TOP_P:-0.9}"
-RL_LEARNING_RATE="${RL_LEARNING_RATE:-1e-6}"
-RL_KL_COEF="${RL_KL_COEF:-0.02}"
+RL_LEARNING_RATE="${RL_LEARNING_RATE:-2e-6}"
+RL_KL_COEF="${RL_KL_COEF:-0.03}"
 RL_SAVE_STEPS="${RL_SAVE_STEPS:-0}"
 RL_OPTIMIZER="${RL_OPTIMIZER:-adafactor}"
 RL_MAX_SAMPLES="${RL_MAX_SAMPLES:-}"
 RL_RESIDUAL_POOL_EPOCH_SIZE="${RL_RESIDUAL_POOL_EPOCH_SIZE:-}"
-RESIDUAL_POOL_SAMPLING_RATIOS="${RESIDUAL_POOL_SAMPLING_RATIOS:-false_negative=0.3,boundary_error=0.3,false_positive=0.2,correct_abnormal=0.1,correct_normal=0.1}"
 RESIDUAL_V2_POOL_SAMPLING_RATIOS="${RESIDUAL_V2_POOL_SAMPLING_RATIOS:-false_negative=0.60,boundary_error=0.20,false_positive=0.10,correct_abnormal=0.10,correct_normal=0.00}"
 RESIDUAL_V2_RL_NUM_GENERATIONS="${RESIDUAL_V2_RL_NUM_GENERATIONS:-6}"
 RESIDUAL_V2_RL_NUM_TRAIN_EPOCHS="${RESIDUAL_V2_RL_NUM_TRAIN_EPOCHS:-2}"
 RESIDUAL_V2_RL_LEARNING_RATE="${RESIDUAL_V2_RL_LEARNING_RATE:-2e-6}"
 RESIDUAL_V2_RL_KL_COEF="${RESIDUAL_V2_RL_KL_COEF:-0.03}"
 
-REWARD_POINT_WEIGHT="${REWARD_POINT_WEIGHT:-0}"
-REWARD_EVENT_WEIGHT="${REWARD_EVENT_WEIGHT:-0.45}"
-REWARD_IOU_WEIGHT="${REWARD_IOU_WEIGHT:-0.35}"
-REWARD_BOUNDARY_WEIGHT="${REWARD_BOUNDARY_WEIGHT:-0.15}"
-REWARD_TYPE_WEIGHT="${REWARD_TYPE_WEIGHT:-0.05}"
 RESIDUAL_V2_REWARD_POINT_WEIGHT="${RESIDUAL_V2_REWARD_POINT_WEIGHT:-0.60}"
 RESIDUAL_V2_REWARD_EVENT_WEIGHT="${RESIDUAL_V2_REWARD_EVENT_WEIGHT:-0.00}"
 RESIDUAL_V2_REWARD_IOU_WEIGHT="${RESIDUAL_V2_REWARD_IOU_WEIGHT:-0.25}"
@@ -255,7 +250,7 @@ RESIDUAL_SUMMARY_PATH="${RESIDUAL_SUMMARY_PATH:-$OUTPUT_DIR/residual_pool/summar
 mkdir -p "$(dirname "$RESIDUAL_POOL_PATH")"
 
 case "$VARIANT" in
-  full_residual|residual_v2)
+  residual_v2)
     echo "=== Stage 3: residual error mining on real train split only ==="
     residual_cmd=(
       "$PYTHON_BIN" "$ROOT_DIR/scripts/build_residual_pool.py"
@@ -280,14 +275,11 @@ case "$VARIANT" in
     fi
     PYTHONPATH="$ROOT_DIR/src:${PYTHONPATH:-}" "${residual_cmd[@]}"
     ;;
-  no_residual)
-    echo "=== Stage 3 skipped: no residual mining ablation ==="
-    ;;
   sft_only)
     echo "=== Stage 3 skipped: SFT-only baseline ==="
     ;;
   *)
-    echo "Unsupported VARIANT=$VARIANT. Expected full_residual, residual_v2, no_residual, or sft_only." >&2
+    echo "Unsupported VARIANT=$VARIANT. Expected residual_v2 or sft_only." >&2
     exit 1
     ;;
 esac
@@ -296,29 +288,17 @@ eval_model_path="$OUTPUT_DIR/model"
 if [[ "$VARIANT" == "sft_only" ]]; then
   echo "=== Stage 4 skipped: SFT-only baseline ==="
 else
-  echo "=== Stage 4: boundary-aware GRPO ==="
-  variant_rl_num_generations="${RL_NUM_GENERATIONS:-4}"
-  variant_rl_num_train_epochs="${RL_NUM_TRAIN_EPOCHS:-1}"
-  variant_rl_learning_rate="${RL_LEARNING_RATE:-1e-6}"
-  variant_rl_kl_coef="${RL_KL_COEF:-0.02}"
-  variant_sampling_ratios="${RESIDUAL_POOL_SAMPLING_RATIOS:-false_negative=0.3,boundary_error=0.3,false_positive=0.2,correct_abnormal=0.1,correct_normal=0.1}"
-  variant_reward_point="${REWARD_POINT_WEIGHT:-0}"
-  variant_reward_event="${REWARD_EVENT_WEIGHT:-0.45}"
-  variant_reward_iou="${REWARD_IOU_WEIGHT:-0.35}"
-  variant_reward_boundary="${REWARD_BOUNDARY_WEIGHT:-0.15}"
-  variant_reward_type="${REWARD_TYPE_WEIGHT:-0.05}"
-  if [[ "$VARIANT" == "residual_v2" ]]; then
-    variant_rl_num_generations="${RESIDUAL_V2_RL_NUM_GENERATIONS:-6}"
-    variant_rl_num_train_epochs="${RESIDUAL_V2_RL_NUM_TRAIN_EPOCHS:-2}"
-    variant_rl_learning_rate="${RESIDUAL_V2_RL_LEARNING_RATE:-2e-6}"
-    variant_rl_kl_coef="${RESIDUAL_V2_RL_KL_COEF:-0.03}"
-    variant_sampling_ratios="${RESIDUAL_V2_POOL_SAMPLING_RATIOS:-false_negative=0.60,boundary_error=0.20,false_positive=0.10,correct_abnormal=0.10,correct_normal=0.00}"
-    variant_reward_point="${RESIDUAL_V2_REWARD_POINT_WEIGHT:-0.60}"
-    variant_reward_event="${RESIDUAL_V2_REWARD_EVENT_WEIGHT:-0.00}"
-    variant_reward_iou="${RESIDUAL_V2_REWARD_IOU_WEIGHT:-0.25}"
-    variant_reward_boundary="${RESIDUAL_V2_REWARD_BOUNDARY_WEIGHT:-0.15}"
-    variant_reward_type="${RESIDUAL_V2_REWARD_TYPE_WEIGHT:-0.00}"
-  fi
+  echo "=== Stage 4: residual_v2 point-F1-aware GRPO ==="
+  variant_rl_num_generations="${RESIDUAL_V2_RL_NUM_GENERATIONS:-6}"
+  variant_rl_num_train_epochs="${RESIDUAL_V2_RL_NUM_TRAIN_EPOCHS:-2}"
+  variant_rl_learning_rate="${RESIDUAL_V2_RL_LEARNING_RATE:-2e-6}"
+  variant_rl_kl_coef="${RESIDUAL_V2_RL_KL_COEF:-0.03}"
+  variant_sampling_ratios="${RESIDUAL_V2_POOL_SAMPLING_RATIOS:-false_negative=0.60,boundary_error=0.20,false_positive=0.10,correct_abnormal=0.10,correct_normal=0.00}"
+  variant_reward_point="${RESIDUAL_V2_REWARD_POINT_WEIGHT:-0.60}"
+  variant_reward_event="${RESIDUAL_V2_REWARD_EVENT_WEIGHT:-0.00}"
+  variant_reward_iou="${RESIDUAL_V2_REWARD_IOU_WEIGHT:-0.25}"
+  variant_reward_boundary="${RESIDUAL_V2_REWARD_BOUNDARY_WEIGHT:-0.15}"
+  variant_reward_type="${RESIDUAL_V2_REWARD_TYPE_WEIGHT:-0.00}"
   grpo_cmd=(
     "$PYTHON_BIN" -m ts_grounder.rl_train_grpo
     --model_name_or_path "$OUTPUT_DIR/model"
@@ -348,15 +328,13 @@ else
     --optimizer "${RL_OPTIMIZER:-adafactor}"
     --seed "${EXPERIMENT_SEED:-2026}"
   )
-  if [[ "$VARIANT" == "full_residual" || "$VARIANT" == "residual_v2" ]]; then
-    grpo_cmd+=(
-      --residual_pool_file "$RESIDUAL_POOL_PATH"
-      --use_residual_pool
-      --residual_pool_sampling_ratios "$variant_sampling_ratios"
-    )
-    if [[ -n "${RL_RESIDUAL_POOL_EPOCH_SIZE:-}" ]]; then
-      grpo_cmd+=(--residual_pool_epoch_size "$RL_RESIDUAL_POOL_EPOCH_SIZE")
-    fi
+  grpo_cmd+=(
+    --residual_pool_file "$RESIDUAL_POOL_PATH"
+    --use_residual_pool
+    --residual_pool_sampling_ratios "$variant_sampling_ratios"
+  )
+  if [[ -n "${RL_RESIDUAL_POOL_EPOCH_SIZE:-}" ]]; then
+    grpo_cmd+=(--residual_pool_epoch_size "$RL_RESIDUAL_POOL_EPOCH_SIZE")
   fi
   if [[ -n "${RL_MAX_SAMPLES:-}" ]]; then
     grpo_cmd+=(--max_samples "$RL_MAX_SAMPLES")
@@ -628,17 +606,11 @@ JSON
         "RL_OPTIMIZER=$RL_OPTIMIZER"
         "RL_MAX_SAMPLES=$RL_MAX_SAMPLES"
         "RL_RESIDUAL_POOL_EPOCH_SIZE=$RL_RESIDUAL_POOL_EPOCH_SIZE"
-        "RESIDUAL_POOL_SAMPLING_RATIOS=$RESIDUAL_POOL_SAMPLING_RATIOS"
         "RESIDUAL_V2_POOL_SAMPLING_RATIOS=$RESIDUAL_V2_POOL_SAMPLING_RATIOS"
         "RESIDUAL_V2_RL_NUM_GENERATIONS=$RESIDUAL_V2_RL_NUM_GENERATIONS"
         "RESIDUAL_V2_RL_NUM_TRAIN_EPOCHS=$RESIDUAL_V2_RL_NUM_TRAIN_EPOCHS"
         "RESIDUAL_V2_RL_LEARNING_RATE=$RESIDUAL_V2_RL_LEARNING_RATE"
         "RESIDUAL_V2_RL_KL_COEF=$RESIDUAL_V2_RL_KL_COEF"
-        "REWARD_POINT_WEIGHT=$REWARD_POINT_WEIGHT"
-        "REWARD_EVENT_WEIGHT=$REWARD_EVENT_WEIGHT"
-        "REWARD_IOU_WEIGHT=$REWARD_IOU_WEIGHT"
-        "REWARD_BOUNDARY_WEIGHT=$REWARD_BOUNDARY_WEIGHT"
-        "REWARD_TYPE_WEIGHT=$REWARD_TYPE_WEIGHT"
         "RESIDUAL_V2_REWARD_POINT_WEIGHT=$RESIDUAL_V2_REWARD_POINT_WEIGHT"
         "RESIDUAL_V2_REWARD_EVENT_WEIGHT=$RESIDUAL_V2_REWARD_EVENT_WEIGHT"
         "RESIDUAL_V2_REWARD_IOU_WEIGHT=$RESIDUAL_V2_REWARD_IOU_WEIGHT"

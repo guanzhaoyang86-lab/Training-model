@@ -1,7 +1,11 @@
 __pycache__/
 *.pyc
+.venv/
 /_toy_run/
 /_smoke_run/
+/_vlm_smoke_run/
+/_vlm_smoke_run_venv/
+/_vlm_tiny_train_run/
 /outputs/
 /dataset/
 /data/

@@ -24,20 +24,6 @@ ERROR_TYPES = (
     "correct_abnormal",
     "correct_normal",
 )
-LEGACY_RESIDUAL_SAMPLING_RATIOS = {
-    "false_negative": 0.30,
-    "boundary_error": 0.30,
-    "false_positive": 0.20,
-    "correct_abnormal": 0.10,
-    "correct_normal": 0.10,
-}
-LEGACY_BOUNDARY_AWARE_REWARD_WEIGHTS = {
-    "point": 0.0,
-    "event": 0.45,
-    "iou": 0.35,
-    "boundary": 0.15,
-    "type": 0.05,
-}
 DEFAULT_RESIDUAL_SAMPLING_RATIOS = {
     "false_negative": 0.60,
     "boundary_error": 0.20,

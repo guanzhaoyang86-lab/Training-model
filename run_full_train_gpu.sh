@@ -1,184 +1,146 @@
 #!/bin/bash
-#SBATCH --account=p33222
-#SBATCH --partition=gengpu
-#SBATCH --gres=gpu:1
-#SBATCH --time=24:00:00
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --job-name=ts_grounder_full
-#SBATCH --output=/gpfs/projects/p33222/ybq9740/Thesis/ts_grounder/logs/%x-%j.out
-
 set -euo pipefail
 
-ROOT_DIR="/gpfs/projects/p33222/ybq9740/Thesis/ts_grounder"
-PYTHON_BIN="${PYTHON_BIN:-/gpfs/projects/p33222/ybq9740/envs/anomllm/bin/python}"
-DATASET_DIR="${DATASET_DIR:-$ROOT_DIR/dataset}"
-DATASET_NAME="${DATASET_NAME:-}"
-RAW_DATASET_ROOT="${RAW_DATASET_ROOT:-}"
-RUN_TAG="${RUN_TAG:-full_$(date +%Y%m%d_%H%M%S)}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/outputs/$RUN_TAG}"
-CONFIG_PATH="${CONFIG_PATH:-$ROOT_DIR/configs/default.yaml}"
-CONFIG_SNAPSHOT_PATH="${CONFIG_SNAPSHOT_PATH:-$OUTPUT_ROOT/train_full.yaml}"
-MPLCONFIGDIR="${MPLCONFIGDIR:-$ROOT_DIR/.mplconfig}"
+ROOT_DIR="${PROJECT_ROOT:-}"
+if [[ -z "$ROOT_DIR" ]]; then
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 
-SEED="${SEED:-2026}"
-EPOCHS="${EPOCHS:-200}"
-BATCH_SIZE="${BATCH_SIZE:-8}"
-NUM_WORKERS="${NUM_WORKERS:-4}"
-HIDDEN_DIM="${HIDDEN_DIM:-128}"
-TEXT_LAYERS="${TEXT_LAYERS:-2}"
-DROPOUT="${DROPOUT:-0.1}"
-IMAGE_H="${IMAGE_H:-224}"
-IMAGE_W="${IMAGE_W:-224}"
-LOCAL_WINDOW="${LOCAL_WINDOW:-25}"
-LR="${LR:-0.0003}"
-MIN_LR="${MIN_LR:-0.00001}"
-WEIGHT_DECAY="${WEIGHT_DECAY:-0.0001}"
-GRAD_CLIP="${GRAD_CLIP:-1.0}"
-POINT_WEIGHT="${POINT_WEIGHT:-1.0}"
-SEG_WEIGHT="${SEG_WEIGHT:-1.0}"
-TYPE_WEIGHT="${TYPE_WEIGHT:-1.0}"
-EVIDENCE_WEIGHT="${EVIDENCE_WEIGHT:-0.5}"
-BC_WEIGHT="${BC_WEIGHT:-1.0}"
-CONS_WEIGHT="${CONS_WEIGHT:-0.2}"
-TV_WEIGHT="${TV_WEIGHT:-0.05}"
+CONFIG_PATH="${CONFIG_PATH:-$ROOT_DIR/configs/vlm_7b_anomaly_db_indexed_text_plain_image.yaml}"
+OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/outputs/vlm_qwen25vl_7b_grounding_indexed_run}"
+MODE="${MODE:-train}"
+RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
+PYTHON_BIN="${PYTHON_BIN:-}"
+LAUNCHER="${LAUNCHER:-python}"
+NUM_PROCS_PER_NODE="${NUM_PROCS_PER_NODE:-1}"
+MASTER_PORT="${MASTER_PORT:-29500}"
 
-mkdir -p "$ROOT_DIR/logs" "$OUTPUT_ROOT" "$MPLCONFIGDIR"
-
-export PYTHONNOUSERSITE=1
-export PYTHONUNBUFFERED=1
-export PYTHONPATH="$ROOT_DIR/src"
-export MPLCONFIGDIR
-
-resolve_raw_dataset_root() {
-  if [[ -n "$RAW_DATASET_ROOT" ]]; then
-    echo "$RAW_DATASET_ROOT"
-    return 0
-  fi
-
-  if [[ -n "$DATASET_NAME" ]]; then
-    echo "$DATASET_DIR/$DATASET_NAME"
-    return 0
-  fi
-
-  if [[ -f "$DATASET_DIR/train.json" ]]; then
-    echo "$DATASET_DIR"
-    return 0
-  fi
-
+pick_python() {
   local candidate
-  local dataset_roots=()
-  while IFS= read -r candidate; do
-    if [[ -f "$candidate/train.json" && -f "$candidate/val.json" ]]; then
-      dataset_roots+=("$candidate")
+  local candidates=(
+    "$ROOT_DIR/.venv/bin/python"
+    "$ROOT_DIR/.venv_smoke/bin/python"
+    "/gpfs/projects/p33222/ybq9740/envs/anomamind/bin/python"
+    "/gpfs/projects/p33222/ybq9740/envs/anomllm/bin/python"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
     fi
-  done < <(find "$DATASET_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
+  done
 
-  if [[ ${#dataset_roots[@]} -eq 1 ]]; then
-    echo "${dataset_roots[0]}"
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
     return 0
-  fi
-
-  if [[ ${#dataset_roots[@]} -eq 0 ]]; then
-    echo "[ERROR] No dataset with train.json/val.json found under $DATASET_DIR" >&2
-  else
-    echo "[ERROR] Multiple dataset roots found under $DATASET_DIR. Set DATASET_NAME or RAW_DATASET_ROOT explicitly." >&2
-    printf ' - %s\n' "${dataset_roots[@]}" >&2
   fi
   return 1
 }
 
-has_npz_split() {
-  local split_dir="$1"
-  [[ -d "$split_dir" ]] && find "$split_dir" -maxdepth 1 -name '*.npz' -print -quit 2>/dev/null | grep -q .
-}
+if [[ -z "$PYTHON_BIN" ]]; then
+  if ! PYTHON_BIN="$(pick_python)"; then
+    echo "未找到可用的 Python。请显式设置 PYTHON_BIN，或准备 Python 3.10+ 环境。" >&2
+    exit 1
+  fi
+fi
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
-  echo "[ERROR] PYTHON_BIN not executable: $PYTHON_BIN" >&2
+  echo "PYTHON_BIN 不可执行: $PYTHON_BIN" >&2
   exit 1
 fi
 
 if [[ ! -f "$CONFIG_PATH" ]]; then
-  echo "[ERROR] Missing base config: $CONFIG_PATH" >&2
+  echo "配置文件不存在: $CONFIG_PATH" >&2
   exit 1
 fi
 
-if [[ ! -d "$DATASET_DIR" ]]; then
-  echo "[ERROR] Missing dataset directory: $DATASET_DIR" >&2
-  exit 1
-fi
-
-RAW_DATASET_ROOT="$(resolve_raw_dataset_root)"
-CONVERTED_DATA_ROOT="${CONVERTED_DATA_ROOT:-$ROOT_DIR/data_full/$(basename "$RAW_DATASET_ROOT")}"
-
-if [[ ! -f "$RAW_DATASET_ROOT/train.json" ]]; then
-  echo "[ERROR] Missing raw PatternFinder split: $RAW_DATASET_ROOT/train.json" >&2
-  exit 1
-fi
-
-echo "========== TS Grounder Full Training =========="
-echo "Start time: $(date)"
-echo "Host: $(hostname)"
-echo "Python: $PYTHON_BIN"
-echo "Dataset dir: $DATASET_DIR"
-echo "Raw dataset root: $RAW_DATASET_ROOT"
-echo "Converted data root: $CONVERTED_DATA_ROOT"
-echo "Output root: $OUTPUT_ROOT"
-echo "Base config: $CONFIG_PATH"
-echo "Config snapshot: $CONFIG_SNAPSHOT_PATH"
-echo "Batch size: $BATCH_SIZE"
-echo "Epochs: $EPOCHS"
-echo "Workers: $NUM_WORKERS"
-echo "Hidden dim: $HIDDEN_DIM"
-echo "Loss weights: point=$POINT_WEIGHT seg=$SEG_WEIGHT type=$TYPE_WEIGHT evidence=$EVIDENCE_WEIGHT bc=$BC_WEIGHT cons=$CONS_WEIGHT tv=$TV_WEIGHT"
-echo "Dataset name: $(basename "$RAW_DATASET_ROOT")"
-nvidia-smi || true
-
-if ! has_npz_split "$CONVERTED_DATA_ROOT/train" || ! has_npz_split "$CONVERTED_DATA_ROOT/val"; then
-  echo "[1/3] Converting PatternFinder JSON into ts_grounder .npz format..."
-  "$PYTHON_BIN" "$ROOT_DIR/tools/convert_patternfinder_dataset.py" \
-    --source-root "$RAW_DATASET_ROOT" \
-    --output-root "$CONVERTED_DATA_ROOT"
-else
-  echo "[1/3] Reusing existing converted dataset at $CONVERTED_DATA_ROOT"
-fi
-
-echo "[2/3] Using base config with runtime overrides..."
-
-echo "[3/3] Launching training..."
+mkdir -p "$ROOT_DIR/outputs" "$ROOT_DIR/.cache" "$ROOT_DIR/.tmp"
 cd "$ROOT_DIR"
-"$PYTHON_BIN" -u train.py \
-  --config "$CONFIG_PATH" \
-  --save-config "$CONFIG_SNAPSHOT_PATH" \
-  --seed "$SEED" \
-  --output-dir "$OUTPUT_ROOT" \
-  --train-dir "$CONVERTED_DATA_ROOT/train" \
-  --val-dir "$CONVERTED_DATA_ROOT/val" \
-  --raw-dataset-root "$RAW_DATASET_ROOT" \
-  --image-size "$IMAGE_H" "$IMAGE_W" \
-  --local-window "$LOCAL_WINDOW" \
-  --hidden-dim "$HIDDEN_DIM" \
-  --text-layers "$TEXT_LAYERS" \
-  --dropout "$DROPOUT" \
-  --epochs "$EPOCHS" \
-  --batch-size "$BATCH_SIZE" \
-  --num-workers "$NUM_WORKERS" \
-  --lr "$LR" \
-  --min-lr "$MIN_LR" \
-  --weight-decay "$WEIGHT_DECAY" \
-  --grad-clip "$GRAD_CLIP" \
-  --point-weight "$POINT_WEIGHT" \
-  --seg-weight "$SEG_WEIGHT" \
-  --type-weight "$TYPE_WEIGHT" \
-  --evidence-weight "$EVIDENCE_WEIGHT" \
-  --bc-weight "$BC_WEIGHT" \
-  --cons-weight "$CONS_WEIGHT" \
-  --tv-weight "$TV_WEIGHT"
 
-echo "Training finished at $(date)"
-echo "Base config: $CONFIG_PATH"
-echo "Resolved config: $CONFIG_SNAPSHOT_PATH"
-echo "Best checkpoint: $OUTPUT_ROOT/best.pt"
-echo "Last checkpoint: $OUTPUT_ROOT/last.pt"
-echo "History: $OUTPUT_ROOT/history.json"
-echo "Summary: $OUTPUT_ROOT/summary.json"
+export MODE
+export HF_HOME="${HF_HOME:-$ROOT_DIR/.cache/huggingface}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-$HF_HOME/hub}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
+export TMPDIR="${TMPDIR:-$ROOT_DIR/.tmp}"
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+if [[ -n "${SOURCE_ROOT:-}" ]]; then
+  export TS_GROUNDER_SOURCE_ROOT="$SOURCE_ROOT"
+fi
+if [[ -n "${MODEL_PATH:-}" ]]; then
+  export TS_GROUNDER_MODEL_PATH="$MODEL_PATH"
+fi
+if [[ -n "${CHECKPOINT_OUTPUT_DIR:-}" ]]; then
+  export TS_GROUNDER_CHECKPOINT_OUTPUT_DIR="$CHECKPOINT_OUTPUT_DIR"
+fi
+if [[ -n "${SFT_NUM_TRAIN_EPOCHS:-}" ]]; then
+  export TS_GROUNDER_NUM_TRAIN_EPOCHS="$SFT_NUM_TRAIN_EPOCHS"
+fi
+if [[ -n "${BF16:-}" ]]; then
+  export TS_GROUNDER_BF16="$BF16"
+fi
+if [[ -n "${FP16:-}" ]]; then
+  export TS_GROUNDER_FP16="$FP16"
+fi
+
+"$PYTHON_BIN" - <<'PY'
+import importlib.util
+import os
+import sys
+
+required = ["yaml"]
+if os.environ.get("MODE", "train") == "train":
+    required.extend(["torch", "datasets", "transformers", "accelerate"])
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        f"当前 Python 是 {sys.version.split()[0]}，至少需要 Python 3.10。"
+        "可以把 PYTHON_BIN 设为 /gpfs/projects/p33222/ybq9740/envs/anomamind/bin/python。"
+    )
+
+if missing:
+    joined = ", ".join(missing)
+    raise SystemExit(
+        f"当前环境缺少依赖: {joined}。"
+        "可以先安装 requirements-lock.txt，或把 PYTHON_BIN 设为 /gpfs/projects/p33222/ybq9740/envs/anomamind/bin/python。"
+    )
+PY
+
+cmd=()
+if [[ "$LAUNCHER" == "torchrun" ]]; then
+  cmd=(
+    "$PYTHON_BIN"
+    -m torch.distributed.run
+    "--nproc_per_node=$NUM_PROCS_PER_NODE"
+    "--master_port=$MASTER_PORT"
+    "$ROOT_DIR/train.py"
+    "--config" "$CONFIG_PATH"
+    "--output-dir" "$OUTPUT_DIR"
+    "--mode" "$MODE"
+  )
+else
+  cmd=(
+    "$PYTHON_BIN"
+    "$ROOT_DIR/train.py"
+    "--config" "$CONFIG_PATH"
+    "--output-dir" "$OUTPUT_DIR"
+    "--mode" "$MODE"
+  )
+fi
+
+if [[ -n "$RESUME_FROM_CHECKPOINT" ]]; then
+  cmd+=("--resume-from-checkpoint" "$RESUME_FROM_CHECKPOINT")
+fi
+
+echo "Using Python: $PYTHON_BIN"
+echo "Config: $CONFIG_PATH"
+echo "Output dir: $OUTPUT_DIR"
+echo "Mode: $MODE"
+echo "Launcher: $LAUNCHER"
+echo "Num processes per node: $NUM_PROCS_PER_NODE"
+echo "SFT num train epochs: ${SFT_NUM_TRAIN_EPOCHS:-config default}"
+
+"${cmd[@]}"
